@@ -70,70 +70,87 @@ int main() {
       assert(message.contains("seq"));
       assert(message.contains("case") && message.at("case").is_object());
       assert(message.at("case").contains("schema"));
+      assert(message.at("case").contains("tests") &&
+             message.at("case").at("tests").is_array());
 
-      const auto schema = message.at("case").at("schema");
-
-      try {
-        // Compile the schema and validate test cases
-        assert(message.at("case").contains("tests") &&
-               message.at("case").at("tests").is_array());
-
-        std::unordered_map<std::string, jsoncons::json> schema_registry;
-        if (message.at("case").contains("registry")) {
-          for (const auto &[key, value] :
-               message.at("case").at("registry").object_range()) {
-            std::error_code ec;
-            auto uri = jsoncons::uri::parse(key, ec);
-            if (!ec) {
-              schema_registry.emplace(uri.path(), value);
-            }
-          }
-        }
-        auto resolver = [&](const jsoncons::uri &uri) {
-          auto it = schema_registry.find(uri.path());
-          if (it != schema_registry.end()) {
-            return it->second;
-          }
-          return jsoncons::json::null();
-        };
-
-        const auto compiled =
-            jsonschema::make_json_schema(schema, resolver, options);
-
+      if (message.contains("output") && message.at("output").is_string() &&
+          message.at("output").as<std::string>() == "annotations") {
         json response;
         response["seq"] = message.at("seq");
         response["results"] = json(json_array_arg);
 
         for (const auto &test : message.at("case").at("tests").array_range()) {
-          assert(test.contains("instance"));
-
-          // Validate this test case and skip error messages
-          auto valid = true;
-          auto reporter =
-              [&valid](const jsonschema::validation_message &message)
-              -> jsonschema::walk_result {
-            valid = false;
-            // TODO Capture error messages
-            return jsonschema::walk_result::abort;
-          };
-          compiled.validate(test.at("instance"), reporter);
-
+          (void)test;
           json test_result;
-          test_result["valid"] = std::move(valid);
+          test_result["skipped"] = true;
+          test_result["message"] =
+              "jsoncons does not support annotation collection";
           response["results"].push_back(std::move(test_result));
         }
 
         std::cout << print(response) << std::endl;
-      } catch (const std::exception &error) {
-        // Report any errors during compilation or validation
-        json response;
-        response["seq"] = message.at("seq");
-        response["errored"] = true;
-        json context;
-        context["message"] = error.what();
-        response["context"] = std::move(context);
+      } else {
+        const auto schema = message.at("case").at("schema");
 
-        std::cout << print(response) << std::endl;
+        try {
+          // Compile the schema and validate test cases
+          std::unordered_map<std::string, jsoncons::json> schema_registry;
+          if (message.at("case").contains("registry")) {
+            for (const auto &[key, value] :
+                 message.at("case").at("registry").object_range()) {
+              std::error_code ec;
+              auto uri = jsoncons::uri::parse(key, ec);
+              if (!ec) {
+                schema_registry.emplace(uri.path(), value);
+              }
+            }
+          }
+          auto resolver = [&](const jsoncons::uri &uri) {
+            auto it = schema_registry.find(uri.path());
+            if (it != schema_registry.end()) {
+              return it->second;
+            }
+            return jsoncons::json::null();
+          };
+
+          const auto compiled =
+              jsonschema::make_json_schema(schema, resolver, options);
+
+          json response;
+          response["seq"] = message.at("seq");
+          response["results"] = json(json_array_arg);
+
+          for (const auto &test : message.at("case").at("tests").array_range()) {
+            assert(test.contains("instance"));
+
+            // Validate this test case and skip error messages
+            auto valid = true;
+            auto reporter =
+                [&valid](const jsonschema::validation_message &message)
+                -> jsonschema::walk_result {
+              valid = false;
+              // TODO Capture error messages
+              return jsonschema::walk_result::abort;
+            };
+            compiled.validate(test.at("instance"), reporter);
+
+            json test_result;
+            test_result["valid"] = std::move(valid);
+            response["results"].push_back(std::move(test_result));
+          }
+
+          std::cout << print(response) << std::endl;
+        } catch (const std::exception &error) {
+          // Report any errors during compilation or validation
+          json response;
+          response["seq"] = message.at("seq");
+          response["errored"] = true;
+          json context;
+          context["message"] = error.what();
+          response["context"] = std::move(context);
+
+          std::cout << print(response) << std::endl;
+        }
       }
     } else if (command == "stop") {
       assert(started);
